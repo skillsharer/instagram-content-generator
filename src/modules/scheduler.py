@@ -2,6 +2,7 @@
 
 import time
 import threading
+import shutil
 from typing import Dict, Optional, Set
 from datetime import datetime
 from pathlib import Path
@@ -217,7 +218,8 @@ class ContentProcessor:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             dest_path = dest_dir / f"{timestamp}_{file_path.name}"
             
-            file_path.rename(dest_path)
+            # Use shutil.move to handle cross-device moves (Docker volumes)
+            shutil.move(str(file_path), str(dest_path))
             logger.debug(f"Moved {file_path.name} to {dest_path}")
             
             # Create metadata file for failed uploads

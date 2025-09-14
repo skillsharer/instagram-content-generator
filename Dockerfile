@@ -25,6 +25,7 @@ WORKDIR /app
 
 # Copy dependency files and source code
 COPY pyproject.toml ./
+COPY README.md ./
 COPY src/ ./src/
 
 # Install Python dependencies with uv
@@ -38,10 +39,7 @@ FROM python:3.11.10-slim as production
 # Install runtime system dependencies
 RUN apt-get update && apt-get install -y \
     libmagic1 \
-    libopencv-core4.5 \
-    libopencv-imgproc4.5 \
-    libopencv-imgcodecs4.5 \
-    libopencv-videoio4.5 \
+    python3-opencv \
     ffmpeg \
     libsm6 \
     libxext6 \
@@ -57,7 +55,7 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN groupadd -r appuser && useradd -r -g appuser -m appuser
 
 # Set working directory
 WORKDIR /app
@@ -67,8 +65,8 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 
 # Create required directories
-RUN mkdir -p /shared /processed /var/log /app/temp \
-    && chown -R appuser:appuser /app /shared /processed /var/log
+RUN mkdir -p /shared /processed /var/log /app/temp /app/data /app/data/model_cache \
+    && chown -R appuser:appuser /app /shared /processed /var/log /home/appuser
 
 # Health check script
 COPY scripts/health_check.sh /usr/local/bin/health_check.sh
@@ -87,6 +85,9 @@ ENV PYTHONUNBUFFERED=1
 ENV LOG_LEVEL=INFO
 ENV HEALTH_CHECK_ENABLED=true
 ENV HEALTH_CHECK_PORT=8080
+# Set cache directories for Hugging Face models
+ENV HF_HOME=/app/data/model_cache
+ENV HUGGINGFACE_HUB_CACHE=/app/data/model_cache
 
 # Expose health check port
 EXPOSE 8080

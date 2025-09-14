@@ -26,15 +26,36 @@ class ContentAnalyzer:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Initializing ContentAnalyzer on device: {self.device}")
         
+        # Set up model cache directory
+        cache_dir = Path("/app/data/model_cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using model cache directory: {cache_dir}")
+        
         # Initialize CLIP model for general content understanding
-        self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        logger.info("Loading CLIP model...")
+        self.clip_processor = CLIPProcessor.from_pretrained(
+            "openai/clip-vit-base-patch32",
+            cache_dir=cache_dir
+        )
+        self.clip_model = CLIPModel.from_pretrained(
+            "openai/clip-vit-base-patch32",
+            cache_dir=cache_dir
+        )
         self.clip_model.to(self.device)
+        logger.info("CLIP model loaded successfully")
         
         # Initialize BLIP model for image captioning
-        self.blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-        self.blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+        logger.info("Loading BLIP model...")
+        self.blip_processor = BlipProcessor.from_pretrained(
+            "Salesforce/blip-image-captioning-base",
+            cache_dir=cache_dir
+        )
+        self.blip_model = BlipForConditionalGeneration.from_pretrained(
+            "Salesforce/blip-image-captioning-base",
+            cache_dir=cache_dir
+        )
         self.blip_model.to(self.device)
+        logger.info("BLIP model loaded successfully")
         
         # Content categories for classification
         self.content_categories = [

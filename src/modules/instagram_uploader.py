@@ -33,7 +33,11 @@ class InstagramUploader:
         self.username = username
         self.password = password
         self.client = Client()
-        self.session_file = Path(f"session_{username}.json")
+        self.session_file = Path(f"/app/data/session_{username}.json")
+        
+        # Ensure session directory exists
+        self.session_file.parent.mkdir(parents=True, exist_ok=True)
+        
         self.last_upload_time = None
         self.upload_delay = timedelta(minutes=config.settings.upload_delay_minutes)
         
@@ -60,10 +64,44 @@ class InstagramUploader:
             # Fresh login
             logger.info(f"Performing fresh login for {self.username}")
             
-            # Set user agent and device settings for better success rate
-            self.client.set_user_agent("Instagram 219.0.0.12.117")
-            
-            success = self.client.login(self.username, self.password)
+            # Try different approach - don't set custom user agent initially
+            # Let instagrapi use its default, then try login
+            try:
+                success = self.client.login(self.username, self.password)
+            except Exception as first_attempt:
+                logger.warning(f"First login attempt failed: {first_attempt}")
+                
+                # Second attempt with user agent and device settings
+                logger.info("Trying login with working device configuration from bibliography-summarizer")
+                
+                # Use the exact working Instagram version from bibliography-summarizer (269.0.0.18.75)
+                self.client.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)")
+                
+                # Set device settings to match the working configuration
+                self.client.set_device({
+                    "app_version": "269.0.0.18.75",
+                    "android_version": 26,
+                    "android_release": "8.0.0",
+                    "dpi": "480dpi",
+                    "resolution": "1080x1920",
+                    "manufacturer": "OnePlus",
+                    "device": "devitron",
+                    "model": "6T Dev",
+                    "cpu": "qcom",
+                    "version_code": "314665256"
+                })
+                
+                # Set additional settings to match working configuration
+                self.client.set_country("US")
+                self.client.set_country_code(1)
+                self.client.set_locale("en_US")
+                self.client.set_timezone_offset(-14400)  # UTC-4
+                
+                # Small delay to avoid being flagged as bot
+                import time
+                time.sleep(3)
+                
+                success = self.client.login(self.username, self.password)
             
             if success:
                 self._save_session()
@@ -71,6 +109,10 @@ class InstagramUploader:
                 return True
             else:
                 logger.error(f"Failed to authenticate {self.username}")
+                # Clear any old session file on failure
+                if self.session_file.exists():
+                    self.session_file.unlink()
+                    logger.info(f"Cleared old session file for {self.username}")
                 return False
                 
         except ChallengeRequired as e:
@@ -87,7 +129,15 @@ class InstagramUploader:
             return False
             
         except Exception as e:
-            logger.error(f"Unexpected error during authentication: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"Unexpected error during authentication: {error_msg}")
+            
+            # Clear session file if we get version-related errors
+            if "out of date" in error_msg.lower() or "upgrade" in error_msg.lower():
+                if self.session_file.exists():
+                    self.session_file.unlink()
+                    logger.info(f"Cleared outdated session file for {self.username}")
+            
             return False
     
     def upload_photo(

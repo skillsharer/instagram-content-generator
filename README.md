@@ -78,8 +78,10 @@ MAX_CAPTION_LENGTH=2200
 # Create shared directories for your users
 mkdir -p shared/user1/{videos,images}
 mkdir -p shared/user2/{videos,images}
-mkdir -p processed logs temp data
+mkdir -p processed logs temp data data/model_cache
 ```
+
+**Note**: The `data/model_cache` directory will store downloaded AI models (~1GB total) to avoid re-downloading them on container restarts.
 
 ### 4. Start the Service
 
@@ -88,7 +90,7 @@ mkdir -p processed logs temp data
 docker-compose up -d
 
 # Or specify users explicitly
-docker-compose run instagram-content-generator python -m instagram_content_generator.main run user1 user2
+docker-compose run instagram-content-generator python -m src.main run user1 user2
 ```
 
 ### 5. Add Content
@@ -114,16 +116,16 @@ The system will automatically:
 
 ```bash
 # Run continuous monitoring (recommended)
-python -m instagram_content_generator.main run user1 user2 user3
+python -m src.main run user1 user2 user3
 
 # Run single scan without continuous monitoring
-python -m instagram_content_generator.main scan user1
+python -m src.main scan user1
 
 # Show system status
-python -m instagram_content_generator.main status
+python -m src.main status
 
 # Show help
-python -m instagram_content_generator.main --help
+python -m src.main --help
 ```
 
 ### Docker Commands
@@ -263,16 +265,17 @@ mypy src/
 
 ```
 src/
-└── instagram_content_generator/
-    ├── main.py                 # Main entry point
-    └── modules/
-        ├── config_manager.py   # Configuration management
-        ├── content_analyzer.py # AI content analysis
-        ├── caption_generator.py # Caption generation
-        ├── instagram_uploader.py # Instagram API integration
-        ├── video_scanner.py    # File monitoring and scanning
-        ├── scheduler.py        # Main automation scheduler
-        └── monitoring.py       # Health checks and monitoring
+├── main.py                 # Main entry point
+├── __init__.py
+└── modules/
+    ├── __init__.py
+    ├── config_manager.py   # Configuration management
+    ├── content_analyzer.py # AI content analysis
+    ├── caption_generator.py # Caption generation
+    ├── instagram_uploader.py # Instagram API integration
+    ├── video_scanner.py    # File monitoring and scanning
+    ├── scheduler.py        # Main automation scheduler
+    └── monitoring.py       # Health checks and monitoring
 ```
 
 ### Adding New Features
@@ -331,7 +334,7 @@ docker-compose logs instagram-content-generator
 docker-compose exec instagram-content-generator /usr/local/bin/health_check.sh system
 
 # Manual file processing
-docker-compose exec instagram-content-generator python -m instagram_content_generator.main scan user1
+docker-compose exec instagram-content-generator python -m src.main scan user1
 ```
 
 ### Log Files
