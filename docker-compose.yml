@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  instagram-content-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: instagram-content-generator
+    restart: unless-stopped
+    
+    environment:
+      # Instagram API Configuration
+      - INSTAGRAM_USERNAME=${INSTAGRAM_USERNAME}
+      - INSTAGRAM_PASSWORD=${INSTAGRAM_PASSWORD}
+      
+      # OpenAI API Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # File system paths (container paths)
+      - SHARED_FOLDER_PATH=/shared
+      - PROCESSED_FOLDER_PATH=/processed
+      
+      # Scheduling configuration
+      - SCAN_INTERVAL_MINUTES=${SCAN_INTERVAL_MINUTES:-30}
+      - UPLOAD_DELAY_MINUTES=${UPLOAD_DELAY_MINUTES:-60}
+      
+      # Content settings
+      - MAX_CAPTION_LENGTH=${MAX_CAPTION_LENGTH:-2200}
+      - USE_HASHTAGS=${USE_HASHTAGS:-true}
+      - MAX_HASHTAGS=${MAX_HASHTAGS:-30}
+      
+      # Upload settings
+      - UPLOAD_QUALITY=${UPLOAD_QUALITY:-high}
+      - VIDEO_MAX_SIZE_MB=${VIDEO_MAX_SIZE_MB:-100}
+      - IMAGE_MAX_SIZE_MB=${IMAGE_MAX_SIZE_MB:-8}
+      
+      # Logging configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE_PATH=/var/log/instagram-content-generator.log
+      
+      # Health check settings
+      - HEALTH_CHECK_PORT=8080
+      - HEALTH_CHECK_ENABLED=true
+      
+      # AI Model settings
+      - CONTENT_ANALYSIS_MODEL=${CONTENT_ANALYSIS_MODEL:-openai/clip-vit-base-patch32}
+      - CAPTION_GENERATION_MODEL=${CAPTION_GENERATION_MODEL:-gpt-4}
+      - CAPTION_TEMPERATURE=${CAPTION_TEMPERATURE:-0.7}
+    
+    volumes:
+      # Content directories
+      - ./shared:/shared:rw
+      - ./processed:/processed:rw
+      
+      # Logs
+      - ./logs:/var/log:rw
+      
+      # Session data persistence
+      - ./data:/app/data:rw
+      
+      # Temporary files
+      - ./temp:/app/temp:rw
+    
+    ports:
+      - "${HEALTH_CHECK_PORT:-8080}:8080"
+    
+    networks:
+      - instagram-net
+    
+    # Resource limits for Raspberry Pi
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          memory: 512M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/health_check.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Command override for multiple users
+    # Uncomment and modify as needed:
+    # command: ["python", "-m", "src.main", "run", "user1", "user2", "user3"]
+
+  # Optional: Monitoring service
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    
+    ports:
+      - "9090:9090"
+    
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    
+    networks:
+      - instagram-net
+    
+    profiles:
+      - monitoring
+
+  # Optional: Grafana for monitoring dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    
+    ports:
+      - "3000:3000"
+    
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning
+    
+    networks:
+      - instagram-net
+    
+    profiles:
+      - monitoring
+
+networks:
+  instagram-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

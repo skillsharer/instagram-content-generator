@@ -1,0 +1,48 @@
+[Unit]
+Description=Instagram Content Generator
+Documentation=https://github.com/your-username/instagram-content-generator
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=forking
+Restart=always
+RestartSec=10
+User=pi
+Group=pi
+WorkingDirectory=%h/instagram-content-generator
+
+# Environment file
+EnvironmentFile=%h/instagram-content-generator/.env
+
+# Start command
+ExecStart=/usr/bin/docker compose up -d
+
+# Stop command  
+ExecStop=/usr/bin/docker compose down
+
+# Reload command
+ExecReload=/usr/bin/docker compose restart
+
+# Health check
+ExecStartPost=/bin/sleep 30
+ExecStartPost=/bin/bash -c 'curl -f http://localhost:${HEALTH_CHECK_PORT:-8080}/health || exit 1'
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=%h/instagram-content-generator
+
+# Resource limits
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=instagram-content-generator
+
+[Install]
+WantedBy=multi-user.target

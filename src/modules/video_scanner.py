@@ -1,0 +1,607 @@
+"""File scanning and monitoring module for Instagram Content Generator."""
+
+import json
+import hashlib
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+from datetime import datetime, timedelta
+import time
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from loguru import logger
+import magic
+
+from .config_manager import config
+
+
+class ContentFileHandler(FileSystemEventHandler):
+    """File system event handler for content files."""
+    
+    def __init__(self, scanner: 'FileScanner'):
+        """Initialize file handler.
+        
+        Args:
+            scanner: Reference to parent scanner
+        """
+        self.scanner = scanner
+        self.supported_image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+        self.supported_video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
+    
+    def on_created(self, event):
+        """Handle file creation events."""
+        if not event.is_directory:
+            file_path = Path(event.src_path)
+            if self._is_supported_file(file_path):
+                logger.info(f"New content file detected: {file_path}")
+                # Add delay to ensure file is completely written
+                time.sleep(2)
+                self.scanner.queue_file(file_path)
+    
+    def on_modified(self, event):
+        """Handle file modification events."""
+        if not event.is_directory:
+            file_path = Path(event.src_path)
+            if self._is_supported_file(file_path):
+                # Only process if file size has stabilized (not still being written)
+                if self._is_file_stable(file_path):
+                    logger.info(f"Modified content file detected: {file_path}")
+                    self.scanner.queue_file(file_path)
+    
+    def _is_supported_file(self, file_path: Path) -> bool:
+        """Check if file is a supported content type.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if supported, False otherwise
+        """
+        extension = file_path.suffix.lower()
+        return extension in (self.supported_image_extensions | self.supported_video_extensions)
+    
+    def _is_file_stable(self, file_path: Path, stability_time: int = 3) -> bool:
+        """Check if file size has stabilized (not being written to).
+        
+        Args:
+            file_path: Path to the file
+            stability_time: Seconds to wait for stability
+            
+        Returns:
+            True if file is stable, False otherwise
+        """
+        try:
+            if not file_path.exists():
+                return False
+            
+            initial_size = file_path.stat().st_size
+            time.sleep(stability_time)
+            
+            if not file_path.exists():
+                return False
+                
+            final_size = file_path.stat().st_size
+            return initial_size == final_size
+            
+        except Exception:
+            return False
+
+
+class FileScanner:
+    """Scans directories for new content and manages file processing queue."""
+    
+    def __init__(self):
+        """Initialize file scanner."""
+        self.watched_directories: Dict[str, Path] = {}
+        self.observers: List[Observer] = []
+        self.file_queue: List[Dict] = []
+        self.processed_files: Set[str] = set()
+        self.queue_file_path = Path("queue.json")
+        self.processed_file_path = Path("processed_files.json")
+        
+        # Load persistent data
+        self._load_queue()
+        self._load_processed_files()
+        
+        # File processing tracking
+        self.processing_stats = {
+            "total_scanned": 0,
+            "total_queued": 0,
+            "total_processed": 0,
+            "total_failed": 0,
+            "last_scan_time": None,
+        }
+    
+    def add_user_directory(self, username: str) -> bool:
+        """Add user directories to scanning.
+        
+        Args:
+            username: Instagram username
+            
+        Returns:
+            True if directories added successfully, False otherwise
+        """
+        try:
+            user_paths = config.get_user_paths(username)
+            
+            for path_type, path in user_paths.items():
+                if path_type in ['videos', 'images']:
+                    # Ensure directory exists
+                    path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Start watching directory
+                    observer = Observer()
+                    event_handler = ContentFileHandler(self)
+                    observer.schedule(event_handler, str(path), recursive=True)
+                    observer.start()
+                    
+                    self.observers.append(observer)
+                    self.watched_directories[f"{username}_{path_type}"] = path
+                    
+                    logger.info(f"Started watching {path_type} directory for {username}: {path}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding user directory for {username}: {str(e)}")
+            return False
+    
+    def scan_user_directories(self, username: str) -> List[Path]:
+        """Perform initial scan of user directories.
+        
+        Args:
+            username: Instagram username
+            
+        Returns:
+            List of found content files
+        """
+        try:
+            user_paths = config.get_user_paths(username)
+            found_files = []
+            
+            for path_type in ['videos', 'images']:
+                directory = user_paths[path_type]
+                if directory.exists():
+                    logger.info(f"Scanning {path_type} directory for {username}: {directory}")
+                    
+                    # Scan for supported files
+                    files = self._scan_directory(directory)
+                    found_files.extend(files)
+                    
+                    logger.info(f"Found {len(files)} {path_type} files for {username}")
+            
+            # Queue new files
+            for file_path in found_files:
+                self.queue_file(file_path)
+            
+            self.processing_stats["total_scanned"] += len(found_files)
+            self.processing_stats["last_scan_time"] = datetime.now().isoformat()
+            
+            return found_files
+            
+        except Exception as e:
+            logger.error(f"Error scanning user directories for {username}: {str(e)}")
+            return []
+    
+    def _scan_directory(self, directory: Path) -> List[Path]:
+        """Scan a directory for content files.
+        
+        Args:
+            directory: Directory to scan
+            
+        Returns:
+            List of found content files
+        """
+        found_files = []
+        supported_extensions = {
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',  # Images
+            '.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'  # Videos
+        }
+        
+        try:
+            for file_path in directory.rglob('*'):
+                if file_path.is_file():
+                    extension = file_path.suffix.lower()
+                    if extension in supported_extensions:
+                        # Check if file is valid and not corrupted
+                        if self._is_valid_file(file_path):
+                            found_files.append(file_path)
+                        else:
+                            logger.warning(f"Skipping invalid/corrupted file: {file_path}")
+        
+        except Exception as e:
+            logger.error(f"Error scanning directory {directory}: {str(e)}")
+        
+        return found_files
+    
+    def _is_valid_file(self, file_path: Path) -> bool:
+        """Check if file is valid and not corrupted.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            # Check file size (minimum 1KB)
+            if file_path.stat().st_size < 1024:
+                return False
+            
+            # Check MIME type
+            mime_type = magic.from_file(str(file_path), mime=True)
+            
+            valid_mime_types = {
+                'image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp',
+                'video/mp4', 'video/avi', 'video/quicktime', 'video/x-msvideo',
+                'video/x-ms-wmv', 'video/x-flv', 'video/webm'
+            }
+            
+            return mime_type in valid_mime_types
+            
+        except Exception as e:
+            logger.warning(f"Error validating file {file_path}: {str(e)}")
+            return False
+    
+    def queue_file(self, file_path: Path) -> bool:
+        """Add file to processing queue.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            True if queued successfully, False otherwise
+        """
+        try:
+            file_hash = self._calculate_file_hash(file_path)
+            
+            # Skip if already processed
+            if file_hash in self.processed_files:
+                logger.debug(f"File already processed, skipping: {file_path}")
+                return False
+            
+            # Skip if already in queue
+            for queued_item in self.file_queue:
+                if queued_item.get('file_hash') == file_hash:
+                    logger.debug(f"File already in queue, skipping: {file_path}")
+                    return False
+            
+            # Add to queue
+            queue_item = {
+                'file_path': str(file_path),
+                'file_hash': file_hash,
+                'file_size': file_path.stat().st_size,
+                'queued_time': datetime.now().isoformat(),
+                'attempts': 0,
+                'status': 'pending',
+                'username': self._extract_username_from_path(file_path),
+                'content_type': self._detect_content_type(file_path),
+            }
+            
+            self.file_queue.append(queue_item)
+            self.processing_stats["total_queued"] += 1
+            
+            # Save queue
+            self._save_queue()
+            
+            logger.info(f"Queued file for processing: {file_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error queuing file {file_path}: {str(e)}")
+            return False
+    
+    def get_next_file(self) -> Optional[Dict]:
+        """Get next file from processing queue.
+        
+        Returns:
+            Next file to process or None if queue is empty
+        """
+        try:
+            # Find next pending file
+            for item in self.file_queue:
+                if item['status'] == 'pending':
+                    # Check if file still exists
+                    if Path(item['file_path']).exists():
+                        return item
+                    else:
+                        # Remove missing file from queue
+                        logger.warning(f"File missing, removing from queue: {item['file_path']}")
+                        self.remove_from_queue(item['file_hash'])
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting next file: {str(e)}")
+            return None
+    
+    def mark_processing(self, file_hash: str) -> bool:
+        """Mark file as currently being processed.
+        
+        Args:
+            file_hash: Hash of the file
+            
+        Returns:
+            True if marked successfully, False otherwise
+        """
+        try:
+            for item in self.file_queue:
+                if item['file_hash'] == file_hash:
+                    item['status'] = 'processing'
+                    item['processing_started'] = datetime.now().isoformat()
+                    self._save_queue()
+                    return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error marking file as processing: {str(e)}")
+            return False
+    
+    def mark_completed(self, file_hash: str, success: bool = True) -> bool:
+        """Mark file as completed and remove from queue.
+        
+        Args:
+            file_hash: Hash of the file
+            success: Whether processing was successful
+            
+        Returns:
+            True if marked successfully, False otherwise
+        """
+        try:
+            # Remove from queue
+            self.file_queue = [item for item in self.file_queue if item['file_hash'] != file_hash]
+            
+            # Add to processed files
+            self.processed_files.add(file_hash)
+            
+            # Update stats
+            if success:
+                self.processing_stats["total_processed"] += 1
+            else:
+                self.processing_stats["total_failed"] += 1
+            
+            # Save state
+            self._save_queue()
+            self._save_processed_files()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error marking file as completed: {str(e)}")
+            return False
+    
+    def mark_failed(self, file_hash: str, error_message: str = "", max_attempts: int = 3) -> bool:
+        """Mark file as failed and handle retry logic.
+        
+        Args:
+            file_hash: Hash of the file
+            error_message: Error message
+            max_attempts: Maximum retry attempts
+            
+        Returns:
+            True if handled successfully, False otherwise
+        """
+        try:
+            for item in self.file_queue:
+                if item['file_hash'] == file_hash:
+                    item['attempts'] += 1
+                    item['last_error'] = error_message
+                    item['last_attempt'] = datetime.now().isoformat()
+                    
+                    if item['attempts'] >= max_attempts:
+                        # Move to failed permanently
+                        item['status'] = 'failed'
+                        logger.error(f"File failed permanently after {max_attempts} attempts: {item['file_path']}")
+                        self.processing_stats["total_failed"] += 1
+                    else:
+                        # Reset to pending for retry
+                        item['status'] = 'pending'
+                        logger.warning(f"File failed, will retry (attempt {item['attempts']}/{max_attempts}): {item['file_path']}")
+                    
+                    self._save_queue()
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error marking file as failed: {str(e)}")
+            return False
+    
+    def remove_from_queue(self, file_hash: str) -> bool:
+        """Remove file from queue.
+        
+        Args:
+            file_hash: Hash of the file
+            
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        try:
+            original_length = len(self.file_queue)
+            self.file_queue = [item for item in self.file_queue if item['file_hash'] != file_hash]
+            
+            if len(self.file_queue) < original_length:
+                self._save_queue()
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error removing file from queue: {str(e)}")
+            return False
+    
+    def get_queue_status(self) -> Dict:
+        """Get current queue status.
+        
+        Returns:
+            Dictionary with queue statistics
+        """
+        try:
+            pending_count = sum(1 for item in self.file_queue if item['status'] == 'pending')
+            processing_count = sum(1 for item in self.file_queue if item['status'] == 'processing')
+            failed_count = sum(1 for item in self.file_queue if item['status'] == 'failed')
+            
+            return {
+                "total_queue_size": len(self.file_queue),
+                "pending": pending_count,
+                "processing": processing_count,
+                "failed": failed_count,
+                "total_processed": len(self.processed_files),
+                "watched_directories": len(self.watched_directories),
+                "processing_stats": self.processing_stats,
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting queue status: {str(e)}")
+            return {}
+    
+    def _calculate_file_hash(self, file_path: Path) -> str:
+        """Calculate SHA-256 hash of file.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            File hash as hex string
+        """
+        try:
+            hash_sha256 = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception as e:
+            logger.error(f"Error calculating hash for {file_path}: {str(e)}")
+            return str(file_path)  # Fallback to path
+    
+    def _extract_username_from_path(self, file_path: Path) -> str:
+        """Extract username from file path.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Username or 'unknown'
+        """
+        try:
+            # Assume path structure: .../shared/<username>/videos|images/...
+            parts = file_path.parts
+            if 'shared' in parts:
+                shared_index = parts.index('shared')
+                if shared_index + 1 < len(parts):
+                    return parts[shared_index + 1]
+            return 'unknown'
+        except Exception:
+            return 'unknown'
+    
+    def _detect_content_type(self, file_path: Path) -> str:
+        """Detect content type from file.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Content type: 'image' or 'video'
+        """
+        try:
+            mime_type = magic.from_file(str(file_path), mime=True)
+            
+            if mime_type.startswith('image/'):
+                return 'image'
+            elif mime_type.startswith('video/'):
+                return 'video'
+            else:
+                return 'unknown'
+                
+        except Exception:
+            # Fallback to extension
+            extension = file_path.suffix.lower()
+            image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'}
+            video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm'}
+            
+            if extension in image_extensions:
+                return 'image'
+            elif extension in video_extensions:
+                return 'video'
+            else:
+                return 'unknown'
+    
+    def _save_queue(self) -> None:
+        """Save queue to file."""
+        try:
+            with open(self.queue_file_path, 'w') as f:
+                json.dump(self.file_queue, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving queue: {str(e)}")
+    
+    def _load_queue(self) -> None:
+        """Load queue from file."""
+        try:
+            if self.queue_file_path.exists():
+                with open(self.queue_file_path, 'r') as f:
+                    self.file_queue = json.load(f)
+                logger.info(f"Loaded {len(self.file_queue)} items from queue")
+        except Exception as e:
+            logger.warning(f"Error loading queue: {str(e)}")
+            self.file_queue = []
+    
+    def _save_processed_files(self) -> None:
+        """Save processed files set to file."""
+        try:
+            with open(self.processed_file_path, 'w') as f:
+                json.dump(list(self.processed_files), f)
+        except Exception as e:
+            logger.error(f"Error saving processed files: {str(e)}")
+    
+    def _load_processed_files(self) -> None:
+        """Load processed files set from file."""
+        try:
+            if self.processed_file_path.exists():
+                with open(self.processed_file_path, 'r') as f:
+                    processed_list = json.load(f)
+                    self.processed_files = set(processed_list)
+                logger.info(f"Loaded {len(self.processed_files)} processed file records")
+        except Exception as e:
+            logger.warning(f"Error loading processed files: {str(e)}")
+            self.processed_files = set()
+    
+    def stop_watching(self) -> None:
+        """Stop all file system observers."""
+        try:
+            for observer in self.observers:
+                observer.stop()
+                observer.join()
+            
+            self.observers.clear()
+            self.watched_directories.clear()
+            
+            logger.info("Stopped all file system watchers")
+            
+        except Exception as e:
+            logger.error(f"Error stopping watchers: {str(e)}")
+    
+    def cleanup_old_entries(self, days_to_keep: int = 30) -> None:
+        """Clean up old processed file entries.
+        
+        Args:
+            days_to_keep: Number of days to keep processed entries
+        """
+        try:
+            cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+            
+            # Clean up failed queue items older than cutoff
+            original_queue_size = len(self.file_queue)
+            self.file_queue = [
+                item for item in self.file_queue 
+                if item['status'] != 'failed' or 
+                datetime.fromisoformat(item.get('last_attempt', item['queued_time'])) > cutoff_date
+            ]
+            
+            cleaned_queue = original_queue_size - len(self.file_queue)
+            
+            if cleaned_queue > 0:
+                logger.info(f"Cleaned up {cleaned_queue} old failed queue entries")
+                self._save_queue()
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up old entries: {str(e)}")
