@@ -8,12 +8,14 @@ services:
     container_name: instagram-content-generator
     restart: unless-stopped
     
+    # Load all environment variables from .env file automatically
+    # This includes all INSTAGRAM_PASSWORD_<USERNAME> variables dynamically
+    # No need to manually add each user - just update .env file!
+    env_file:
+      - .env
+    
     environment:
-      # Instagram API Configuration
-      - INSTAGRAM_USERNAME=${INSTAGRAM_USERNAME}
-      - INSTAGRAM_PASSWORD=${INSTAGRAM_PASSWORD}
-      
-      # OpenAI API Configuration
+      # OpenAI API Configuration (explicit for clarity)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       
       # File system paths (container paths)

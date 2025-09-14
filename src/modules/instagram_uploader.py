@@ -72,9 +72,8 @@ class InstagramUploader:
                 logger.warning(f"First login attempt failed: {first_attempt}")
                 
                 # Second attempt with user agent and device settings
-                logger.info("Trying login with working device configuration from bibliography-summarizer")
+                logger.info("Trying login with another device configuration")
                 
-                # Use the exact working Instagram version from bibliography-summarizer (269.0.0.18.75)
                 self.client.set_user_agent("Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)")
                 
                 # Set device settings to match the working configuration

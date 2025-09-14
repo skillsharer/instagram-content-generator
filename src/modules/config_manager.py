@@ -11,10 +11,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # Instagram API Configuration
-    instagram_username: str = Field(default="", env="INSTAGRAM_USERNAME")
-    instagram_password: str = Field(default="", env="INSTAGRAM_PASSWORD")
-    
     # OpenAI API Configuration
     openai_api_key: str = Field(default="", env="OPENAI_API_KEY")
     
@@ -116,15 +112,14 @@ class ConfigManager:
         return paths
     
     def validate_instagram_credentials(self) -> bool:
-        """Validate that Instagram credentials are provided.
+        """Instagram credentials are now user-specific (INSTAGRAM_PASSWORD_<USERNAME>).
+        
+        This method is deprecated as credentials are validated per-user at runtime.
         
         Returns:
-            True if credentials are valid, False otherwise
+            Always True (validation moved to per-user level)
         """
-        return bool(
-            self.settings.instagram_username and 
-            self.settings.instagram_password
-        )
+        return True
     
     def validate_openai_credentials(self) -> bool:
         """Validate that OpenAI credentials are provided.

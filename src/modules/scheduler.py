@@ -49,11 +49,21 @@ class ContentProcessor:
         """
         if username not in self.instagram_uploaders:
             try:
-                # For now, use global credentials - in production you'd have per-user credentials
-                uploader = InstagramUploader(
-                    config.settings.instagram_username,
-                    config.settings.instagram_password
-                )
+                # Use folder name as Instagram username and require user-specific password
+                import os
+                
+                # Require user-specific password: INSTAGRAM_PASSWORD_<username>
+                password_env_var = f"INSTAGRAM_PASSWORD_{username.upper()}"
+                password = os.getenv(password_env_var)
+                
+                if not password:
+                    logger.error(f"No password found for user {username}. Please set {password_env_var} environment variable.")
+                    return None
+                
+                logger.info(f"Using user-specific Instagram credentials for {username}")
+                
+                # Use the folder name as the Instagram username
+                uploader = InstagramUploader(username, password)
                 
                 if uploader.authenticate():
                     self.instagram_uploaders[username] = uploader
