@@ -16,7 +16,12 @@ from loguru import logger
 import magic
 
 from .config_manager import config
+import sys
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 class ContentAnalyzer:
     """Analyzes images and videos to extract descriptive content."""
@@ -27,7 +32,7 @@ class ContentAnalyzer:
         logger.info(f"Initializing ContentAnalyzer on device: {self.device}")
         
         # Set up model cache directory
-        cache_dir = Path("/app/data/model_cache")
+        cache_dir = Path(os.getenv("HF_HOME", "./model_cache"))
         cache_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Using model cache directory: {cache_dir}")
         
